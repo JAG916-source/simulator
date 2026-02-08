@@ -12,15 +12,18 @@ if (!POLYGON_KEY) {
 }
 
 /* =========================
-   CORS — NETLIFY
+   CORS — SAFE + DEV FRIENDLY
 ========================= */
 app.use(
   cors({
     origin: [
       "https://stellar-gecko-96c6ca.netlify.app",
       "http://localhost:3000",
+      "http://localhost:5500",
+      "http://127.0.0.1:5500",
     ],
     methods: ["GET"],
+    credentials: false,
   })
 );
 
@@ -57,7 +60,7 @@ app.get("/api/symbol-search", async (req, res) => {
 
     res.json(results);
   } catch (err) {
-    console.error("Symbol search failed", err);
+    console.error("❌ Symbol search failed", err);
     res.status(500).json([]);
   }
 });
@@ -85,13 +88,13 @@ app.get("/api/candles", async (req, res) => {
     const data = await r.json();
 
     if (!data.results) {
-      console.error("Polygon error:", data);
+      console.error("❌ Polygon error:", data);
       return res.json({ results: [] });
     }
 
     res.json({ results: data.results });
   } catch (err) {
-    console.error("Candle fetch failed", err);
+    console.error("❌ Candle fetch failed", err);
     res.status(500).json({ results: [] });
   }
 });
@@ -100,5 +103,5 @@ app.get("/api/candles", async (req, res) => {
    START
 ========================= */
 app.listen(PORT, () => {
-  console.log(`Backend listening on ${PORT}`);
+  console.log(`🚀 Backend listening on port ${PORT}`);
 });
