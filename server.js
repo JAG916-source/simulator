@@ -1,37 +1,35 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// 🔒 CORS — allow your Netlify frontend
+/* =========================
+   CORS — NETLIFY ONLY
+========================= */
 app.use(
   cors({
-    origin: [
-      "https://stellar-gecko-96c6ca.netlify.app"
-    ],
+    origin: "https://stellar-gecko-96c6ca.netlify.app",
     methods: ["GET"],
   })
 );
 
 app.use(express.json());
 
+/* =========================
+   HEALTH
+========================= */
 app.get("/", (req, res) => {
   res.send("Simulator backend running");
 });
 
-/* ===============================
-   SYMBOL SEARCH (FIXES SEARCH BAR)
-================================ */
-app.get("/api/symbol-search", async (req, res) => {
+/* =========================
+   SYMBOL SEARCH
+========================= */
+app.get("/api/symbol-search", (req, res) => {
   const q = req.query.q?.toUpperCase();
+  if (!q) return res.json([]);
 
-  if (!q) {
-    return res.json([]);
-  }
-
-  // TEMP MOCK — frontend expects this shape
   const results = [
     { symbol: "AAPL", name: "Apple Inc." },
     { symbol: "NVDA", name: "NVIDIA Corporation" },
@@ -42,19 +40,18 @@ app.get("/api/symbol-search", async (req, res) => {
   res.json(results);
 });
 
-/* ===============================
-   CANDLES (WORKING)
-================================ */
-app.get("/api/candles", async (req, res) => {
-  const { symbol, tf = "15m" } = req.query;
-
+/* =========================
+   CANDLES (MOCK, STABLE)
+========================= */
+app.get("/api/candles", (req, res) => {
+  const { symbol } = req.query;
   if (!symbol) {
     return res.status(400).json({ error: "Missing symbol" });
   }
 
   const now = Date.now();
-  const candles = Array.from({ length: 100 }, (_, i) => ({
-    t: now - (100 - i) * 60_000,
+  const candles = Array.from({ length: 120 }, (_, i) => ({
+    t: now - (120 - i) * 60_000,
     o: 15 + Math.random(),
     h: 16 + Math.random(),
     l: 14 + Math.random(),
@@ -65,6 +62,9 @@ app.get("/api/candles", async (req, res) => {
   res.json({ results: candles });
 });
 
+/* =========================
+   START
+========================= */
 app.listen(PORT, () => {
   console.log(`Backend listening on ${PORT}`);
 });
