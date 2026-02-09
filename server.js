@@ -30,7 +30,7 @@ app.use(
 app.use(express.json());
 
 /* =========================
-   HEALTH
+   HEALTH CHECK
 ========================= */
 app.get("/", (_, res) => {
   res.send("Simulator backend running");
@@ -66,17 +66,21 @@ app.get("/api/symbol-search", async (req, res) => {
 });
 
 /* =========================
-   CANDLES — POLYGON AGGS
+   CANDLES — POLYGON AGGS (FIXED)
 ========================= */
 app.get("/api/candles", async (req, res) => {
   const { symbol, tf = "15m" } = req.query;
+
   if (!symbol) {
     return res.status(400).json({ error: "Missing symbol" });
   }
 
+  // tf like "15m" → 15
   const multiplier = Number(tf.replace("m", "")) || 15;
-  const now = Date.now();
-  const from = now - 1000 * 60 * multiplier * 150;
+
+  // 🔴 POLYGON EXPECTS UNIX SECONDS — NOT MILLISECONDS
+  const now = Math.floor(Date.now() / 1000);
+  const from = now - multiplier * 60 * 150;
 
   try {
     const url =
@@ -84,12 +88,24 @@ app.get("/api/candles", async (req, res) => {
       `/range/${multiplier}/minute/${from}/${now}` +
       `?adjusted=true&sort=asc&limit=150&apiKey=${POLYGON_KEY}`;
 
+    console.log("📡 Polygon candle request:", url);
+
     const r = await fetch(url);
     const data = await r.json();
 
-    if (!data.results) {
-      console.error("❌ Polygon error:", data);
-      return res.json({ results: [] });
+    // 🔴 HARD FAIL IF POLYGON RETURNS NO DATA
+    if (
+      data.status !== "OK" ||
+      !Array.isArray(data.results) ||
+      data.results.length === 0
+    ) {
+      console.error("❌ Polygon returned no candles", {
+        symbol,
+        from,
+        to: now,
+        status: data.status,
+      });
+      return res.status(502).json({ results: [] });
     }
 
     res.json({ results: data.results });
@@ -100,7 +116,7 @@ app.get("/api/candles", async (req, res) => {
 });
 
 /* =========================
-   START
+   START SERVER
 ========================= */
 app.listen(PORT, () => {
   console.log(`🚀 Backend listening on port ${PORT}`);
