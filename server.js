@@ -4,7 +4,6 @@ import fetch from "node-fetch";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-
 const POLYGON_KEY = process.env.POLYGON_API_KEY;
 
 if (!POLYGON_KEY) {
@@ -16,12 +15,7 @@ if (!POLYGON_KEY) {
 ========================= */
 app.use(
   cors({
-    origin: [
-      "https://stellar-gecko-96c6ca.netlify.app",
-      "http://localhost:3000",
-      "http://localhost:5500",
-      "http://127.0.0.1:5500",
-    ],
+    origin: "*",
     methods: ["GET"],
   })
 );
@@ -51,13 +45,12 @@ app.get("/api/symbol-search", async (req, res) => {
     const r = await fetch(url);
     const data = await r.json();
 
-    const results =
+    res.json(
       data.results?.map(t => ({
         symbol: t.ticker,
         name: t.name,
-      })) || [];
-
-    res.json(results);
+      })) || []
+    );
   } catch (err) {
     console.error("❌ Symbol search failed", err);
     res.status(500).json([]);
@@ -65,55 +58,38 @@ app.get("/api/symbol-search", async (req, res) => {
 });
 
 /* =========================
-   CANDLES — AUTO FALLBACK
+   CANDLES (15-MIN DELAY)
 ========================= */
 app.get("/api/candles", async (req, res) => {
-  const { symbol, tf = "15m" } = req.query;
+  const { symbol } = req.query;
   if (!symbol) return res.status(400).json({ error: "Missing symbol" });
 
-  // Requested TF → fallback chain
-  const tfChain =
-    tf === "1m"
-      ? [1, 5, 15]
-      : tf === "5m"
-      ? [5, 15]
-      : [Number(tf.replace("m", "")) || 15];
+  const DELAY_SECONDS = 15 * 60;
+  const now = Math.floor(Date.now() / 1000) - DELAY_SECONDS;
 
-  const now = Math.floor(Date.now() / 1000);
+  const multiplier = 1; // 1-minute candles (TradingView style)
+  const limit = 300;
+  const from = now - multiplier * 60 * limit;
 
-  for (const multiplier of tfChain) {
-    const from = now - multiplier * 60 * 150;
+  const url =
+    `https://api.polygon.io/v2/aggs/ticker/${symbol.toUpperCase()}` +
+    `/range/${multiplier}/minute/${from}/${now}` +
+    `?adjusted=true&sort=asc&limit=${limit}&apiKey=${POLYGON_KEY}`;
 
-    const url =
-      `https://api.polygon.io/v2/aggs/ticker/${symbol.toUpperCase()}` +
-      `/range/${multiplier}/minute/${from}/${now}` +
-      `?adjusted=true&sort=asc&limit=150&apiKey=${POLYGON_KEY}`;
+  try {
+    const r = await fetch(url);
+    const data = await r.json();
 
-    console.log(`📡 Polygon request (${multiplier}m):`, url);
-
-    try {
-      const r = await fetch(url);
-      const data = await r.json();
-
-      if (
-        data.status === "OK" &&
-        Array.isArray(data.results) &&
-        data.results.length > 0
-      ) {
-        // ✅ SUCCESS — return first valid timeframe
-        return res.json({
-          results: data.results,
-          tf: `${multiplier}m`,
-        });
-      }
-    } catch (err) {
-      console.error(`❌ Fetch failed for ${multiplier}m`, err);
+    if (data.status === "OK" && data.results?.length) {
+      return res.json({ results: data.results });
     }
-  }
 
-  // Absolute last resort — never crash frontend
-  console.warn("⚠️ No candles available, returning empty set");
-  res.json({ results: [] });
+    // WEEKEND / HOLIDAY FALLBACK
+    res.json({ results: [] });
+  } catch (err) {
+    console.error("❌ Candle fetch failed", err);
+    res.status(500).json({ results: [] });
+  }
 });
 
 /* =========================
