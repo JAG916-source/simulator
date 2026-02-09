@@ -12,7 +12,7 @@ if (!POLYGON_KEY) {
 }
 
 /* =========================
-   CORS — SAFE + DEV FRIENDLY
+   CORS
 ========================= */
 app.use(
   cors({
@@ -23,21 +23,20 @@ app.use(
       "http://127.0.0.1:5500",
     ],
     methods: ["GET"],
-    credentials: false,
   })
 );
 
 app.use(express.json());
 
 /* =========================
-   HEALTH CHECK
+   HEALTH
 ========================= */
 app.get("/", (_, res) => {
   res.send("Simulator backend running");
 });
 
 /* =========================
-   SYMBOL SEARCH — POLYGON
+   SYMBOL SEARCH
 ========================= */
 app.get("/api/symbol-search", async (req, res) => {
   const q = req.query.q;
@@ -66,57 +65,59 @@ app.get("/api/symbol-search", async (req, res) => {
 });
 
 /* =========================
-   CANDLES — POLYGON AGGS (FIXED)
+   CANDLES — AUTO FALLBACK
 ========================= */
 app.get("/api/candles", async (req, res) => {
   const { symbol, tf = "15m" } = req.query;
+  if (!symbol) return res.status(400).json({ error: "Missing symbol" });
 
-  if (!symbol) {
-    return res.status(400).json({ error: "Missing symbol" });
-  }
+  // Requested TF → fallback chain
+  const tfChain =
+    tf === "1m"
+      ? [1, 5, 15]
+      : tf === "5m"
+      ? [5, 15]
+      : [Number(tf.replace("m", "")) || 15];
 
-  // tf like "15m" → 15
-  const multiplier = Number(tf.replace("m", "")) || 15;
-
-  // 🔴 POLYGON EXPECTS UNIX SECONDS — NOT MILLISECONDS
   const now = Math.floor(Date.now() / 1000);
-  const from = now - multiplier * 60 * 150;
 
-  try {
+  for (const multiplier of tfChain) {
+    const from = now - multiplier * 60 * 150;
+
     const url =
       `https://api.polygon.io/v2/aggs/ticker/${symbol.toUpperCase()}` +
       `/range/${multiplier}/minute/${from}/${now}` +
       `?adjusted=true&sort=asc&limit=150&apiKey=${POLYGON_KEY}`;
 
-    console.log("📡 Polygon candle request:", url);
+    console.log(`📡 Polygon request (${multiplier}m):`, url);
 
-    const r = await fetch(url);
-    const data = await r.json();
+    try {
+      const r = await fetch(url);
+      const data = await r.json();
 
-    // 🔴 HARD FAIL IF POLYGON RETURNS NO DATA
-    if (
-      data.status !== "OK" ||
-      !Array.isArray(data.results) ||
-      data.results.length === 0
-    ) {
-      console.error("❌ Polygon returned no candles", {
-        symbol,
-        from,
-        to: now,
-        status: data.status,
-      });
-      return res.status(502).json({ results: [] });
+      if (
+        data.status === "OK" &&
+        Array.isArray(data.results) &&
+        data.results.length > 0
+      ) {
+        // ✅ SUCCESS — return first valid timeframe
+        return res.json({
+          results: data.results,
+          tf: `${multiplier}m`,
+        });
+      }
+    } catch (err) {
+      console.error(`❌ Fetch failed for ${multiplier}m`, err);
     }
-
-    res.json({ results: data.results });
-  } catch (err) {
-    console.error("❌ Candle fetch failed", err);
-    res.status(500).json({ results: [] });
   }
+
+  // Absolute last resort — never crash frontend
+  console.warn("⚠️ No candles available, returning empty set");
+  res.json({ results: [] });
 });
 
 /* =========================
-   START SERVER
+   START
 ========================= */
 app.listen(PORT, () => {
   console.log(`🚀 Backend listening on port ${PORT}`);
