@@ -22,6 +22,15 @@ let market = {
 };
 
 /* =========================
+   ACCOUNT / POSITIONS
+========================= */
+let account = {
+  balance: 100_000
+};
+
+let positions = new Map();
+
+/* =========================
    MIDDLEWARE
 ========================= */
 app.use(cors({ origin: "*" }));
@@ -35,7 +44,7 @@ app.get("/", (_, res) => {
 });
 
 /* =========================
-   SYMBOL SEARCH (UNCHANGED)
+   SYMBOL SEARCH
 ========================= */
 app.get("/api/symbol-search", async (req, res) => {
   const q = req.query.q;
@@ -63,13 +72,13 @@ app.get("/api/symbol-search", async (req, res) => {
 });
 
 /* =========================
-   INTERNAL: FETCH POLYGON CANDLES
+   FETCH POLYGON CANDLES
 ========================= */
 async function fetchPolygonCandles(symbol) {
   const DELAY_SECONDS = 15 * 60;
   const now = Math.floor(Date.now() / 1000) - DELAY_SECONDS;
 
-  const multiplier = 1; // 1-minute candles
+  const multiplier = 1;
   const limit = 300;
   const from = now - multiplier * 60 * limit;
 
@@ -85,7 +94,6 @@ async function fetchPolygonCandles(symbol) {
     throw new Error("No candle data returned");
   }
 
-  // Normalize candles
   return data.results.map(c => ({
     t: c.t,
     o: c.o,
@@ -114,6 +122,10 @@ app.post("/api/market/start", async (req, res) => {
     market.pointer = 0;
     market.running = true;
 
+    // reset trading state per symbol/session
+    positions.clear();
+    account.balance = 100_000;
+
     console.log(`✅ Market started: ${symbol} (${candles.length} candles)`);
 
     res.json({ ok: true, candles: candles.length });
@@ -139,11 +151,79 @@ app.get("/api/market/stream", (req, res) => {
 
     const candle = market.candles[market.pointer++];
     res.write(`data: ${JSON.stringify(candle)}\n\n`);
-  }, 1000); // 1 candle per second (adjust later)
+  }, 1000);
 
   req.on("close", () => {
     clearInterval(interval);
     console.log("📴 Client disconnected from stream");
+  });
+});
+
+/* =========================
+   EXECUTE ORDER
+========================= */
+app.post("/api/order", (req, res) => {
+  const { symbol, side, qty } = req.body;
+
+  if (!symbol || !side || !qty || qty <= 0) {
+    return res.status(400).json({ error: "Invalid order" });
+  }
+
+  if (!market.running || market.symbol !== symbol) {
+    return res.status(400).json({ error: "Market not running" });
+  }
+
+  const candle = market.candles[market.pointer - 1];
+  if (!candle) {
+    return res.status(400).json({ error: "No price available" });
+  }
+
+  const price = candle.c;
+  const cost = price * qty;
+
+  if (side === "BUY") {
+    if (account.balance < cost) {
+      return res.status(400).json({ error: "Insufficient funds" });
+    }
+
+    account.balance -= cost;
+
+    if (!positions.has(symbol)) {
+      positions.set(symbol, {
+        symbol,
+        qty,
+        avgPrice: price
+      });
+    } else {
+      const p = positions.get(symbol);
+      const totalCost = p.avgPrice * p.qty + cost;
+      p.qty += qty;
+      p.avgPrice = totalCost / p.qty;
+    }
+  }
+
+  if (side === "SELL") {
+    if (!positions.has(symbol)) {
+      return res.status(400).json({ error: "No position to sell" });
+    }
+
+    const p = positions.get(symbol);
+    if (p.qty < qty) {
+      return res.status(400).json({ error: "Not enough shares" });
+    }
+
+    p.qty -= qty;
+    account.balance += cost;
+
+    if (p.qty === 0) {
+      positions.delete(symbol);
+    }
+  }
+
+  res.json({
+    ok: true,
+    balance: account.balance,
+    positions: Array.from(positions.values())
   });
 });
 
